@@ -40,7 +40,7 @@ def text_to_chunks(texts, word_length=150, start_page=1):
     text_toks = [t.split(' ') for t in texts]
     page_nums = []
     chunks = []
-    
+
     for idx, words in enumerate(text_toks):
         for i in range(0, len(words), word_length):
             chunk = words[i:i+word_length]
@@ -55,31 +55,34 @@ def text_to_chunks(texts, word_length=150, start_page=1):
 
 
 class SemanticSearch:
-    
+
     def __init__(self):
         self.use = hub.load('https://tfhub.dev/google/universal-sentence-encoder/4')
         self.fitted = False
-    
-    
-    def fit(self, data, batch=1000, n_neighbors=5):
+
+
+    def fit_data(self, data, batch=1000, n_neighbors=5):
         self.data = data
         self.embeddings = self.get_text_embedding(data, batch=batch)
+        self.fit(n_neighbors)
+
+    def fit(self, n_neighbors=5):
         n_neighbors = min(n_neighbors, len(self.embeddings))
         self.nn = NearestNeighbors(n_neighbors=n_neighbors)
         self.nn.fit(self.embeddings)
         self.fitted = True
-    
-    
+
+
     def __call__(self, text, return_data=True):
         inp_emb = self.use([text])
         neighbors = self.nn.kneighbors(inp_emb, return_distance=False)[0]
-        
+
         if return_data:
             return [self.data[i] for i in neighbors]
         else:
             return neighbors
-    
-    
+
+
     def get_text_embedding(self, texts, batch=1000):
         embeddings = []
         for i in range(0, len(texts), batch):
@@ -98,23 +101,25 @@ class SemanticSearch:
 #    recommender.fit(chunks)
 #    return 'Corpus Loaded.'
 
-# The modified function generates embeddings based on PDF file name and page number and checks if the embeddings file exists before loading or generating it.	
+# The modified function generates embeddings based on PDF file name and page number and checks if the embeddings file exists before loading or generating it.
 def load_recommender(path, start_page=1):
     global recommender
     pdf_file = os.path.basename(path)
     embeddings_file = f"{pdf_file}_{start_page}.npy"
-    
-    if os.path.isfile(embeddings_file):
-        embeddings = np.load(embeddings_file)
-        recommender.embeddings = embeddings
-        recommender.fitted = True
-        return "Embeddings loaded from file"
-    
+
     texts = pdf_to_text(path, start_page=start_page)
     chunks = text_to_chunks(texts, start_page=start_page)
-    recommender.fit(chunks)
+    if os.path.isfile(embeddings_file):
+        embeddings = np.load(embeddings_file)
+        recommender.data = chunks
+        recommender.embeddings = embeddings
+        recommender.fit()
+        return "Embeddings loaded from file"
+
+    recommender.fit_data(chunks)
     np.save(embeddings_file, recommender.embeddings)
     return 'Corpus Loaded.'
+
 
 
 
@@ -130,12 +135,12 @@ def generate_text(openAI_key,prompt, engine="text-davinci-003"):
     )
     message = completions.choices[0].text
     return message
-    
+
 def generate_text2(openAI_key, prompt, engine="gpt-3.5-turbo-0301"):
     openai.api_key = openAI_key
     messages = [{'role': 'system', 'content': 'You are a helpful assistant.'},
                 {'role': 'user', 'content': prompt}]
-    
+
     completions = openai.ChatCompletion.create(
         model=engine,
         messages=messages,
@@ -153,7 +158,7 @@ def generate_answer(question,openAI_key):
     prompt += 'search results:\n\n'
     for c in topn_chunks:
         prompt += c + '\n\n'
-        
+
     prompt += "Instructions: Compose a comprehensive reply to the query using the search results given. "\
               "Cite each reference using [ Page Number] notation (every result has this number at the beginning). "\
               "Citation should be done at the end of each sentence. If the search results mention multiple subjects "\
@@ -162,7 +167,7 @@ def generate_answer(question,openAI_key):
               "If the text does not relate to the query, simply state 'Text Not Found in PDF'. Ignore outlier "\
               "search results which has nothing to do with the question. Only answer what is asked. The "\
               "answer should be short and concise. Answer step-by-step. \n\nQuery: {question}\nAnswer: "
-    
+
     prompt += f"Query: {question}\nAnswer:"
     answer = generate_text(openAI_key, prompt,"text-davinci-003")
     return answer
@@ -173,7 +178,7 @@ def question_answer(url, file, question,openAI_key):
         return '[ERROR]: Please enter you Open AI Key. Get your key here : https://platform.openai.com/account/api-keys'
     if url.strip() == '' and file == None:
         return '[ERROR]: Both URL and PDF is empty. Provide atleast one.'
-    
+
     if url.strip() != '' and file != None:
         return '[ERROR]: Both URL and PDF is provided. Please provide only one (eiter URL or PDF).'
 
@@ -186,7 +191,9 @@ def question_answer(url, file, question,openAI_key):
         old_file_name = file.name
         file_name = file.name
         file_name = file_name[:-12] + file_name[-4:]
-        os.rename(old_file_name, file_name)
+
+        if os.path.isfile(old_file_name) and not os.path.isfile(file_name):
+            os.rename(old_file_name, file_name)
         load_recommender(file_name)
 
     if question.strip() == '':
@@ -208,10 +215,14 @@ with gr.Blocks() as demo:
     gr.Markdown(description)
 
     with gr.Row():
-        
+
         with gr.Group():
             gr.Markdown(f'<p style="text-align:center">Get your Open AI API key <a href="https://platform.openai.com/account/api-keys">here</a></p>')
-            openAI_key=gr.Textbox(label='Enter your OpenAI API key here')
+
+            default_key = os.environ.get('OPENAI_API_KEY')
+            default_key = '' if default_key is None else default_key
+
+            openAI_key=gr.Textbox(label='Enter your OpenAI API key here', value=default_key)
             url = gr.Textbox(label='Enter PDF URL here')
             gr.Markdown("<center><h4>OR<h4></center>")
             file = gr.File(label='Upload your PDF/ Research Paper / Book here', file_types=['.pdf'])
@@ -223,7 +234,7 @@ with gr.Blocks() as demo:
             answer = gr.Textbox(label='The answer to your question is :')
 
         btn.click(question_answer, inputs=[url, file, question,openAI_key], outputs=[answer])
-#openai.api_key = os.getenv('Your_Key_Here') 
+#openai.api_key = os.getenv('Your_Key_Here')
 demo.launch()
 
 
