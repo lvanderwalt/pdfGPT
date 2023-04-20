@@ -110,9 +110,8 @@ def load_recommender(path, start_page=1):
     texts = pdf_to_text(path, start_page=start_page)
     chunks = text_to_chunks(texts, start_page=start_page)
     if os.path.isfile(embeddings_file):
-        embeddings = np.load(embeddings_file)
         recommender.data = chunks
-        recommender.embeddings = embeddings
+        recommender.embeddings = np.load(embeddings_file)
         recommender.fit()
         return "Embeddings loaded from file"
 
@@ -188,13 +187,7 @@ def question_answer(url, file, question,openAI_key):
         load_recommender('corpus.pdf')
 
     else:
-        old_file_name = file.name
-        file_name = file.name
-        file_name = file_name[:-12] + file_name[-4:]
-
-        if os.path.isfile(old_file_name) and not os.path.isfile(file_name):
-            os.rename(old_file_name, file_name)
-        load_recommender(file_name)
+        load_recommender(file.name)
 
     if question.strip() == '':
         return '[ERROR]: Question field is empty'
